@@ -1,0 +1,59 @@
+# Clawless default configuration
+# Override values with environment variables (CLAWLESS_ prefix) or a custom config file.
+
+data_dir: "./data"
+default_profile: "default"
+log_level: "INFO"
+
+# LLM endpoints — ordered by priority (lowest number = tried first)
+# Uncomment and configure the endpoints you want to use.
+# Supported providers: "openai" (default, any OpenAI-compatible API) or "anthropic"
+llm_endpoints: []
+#  - name: "local-ollama"
+#    base_url: "http://localhost:11434/v1"
+#    model: "llama3.2"
+#    provider: "openai"
+#    api_key: ""
+#    priority: 0
+#    timeout: 60.0
+#    max_tokens: 1024
+#
+#  - name: "claude"
+#    base_url: "https://api.anthropic.com"
+#    model: "claude-sonnet-4-5-20250929"
+#    provider: "anthropic"
+#    api_key: "${ANTHROPIC_API_KEY}"
+#    priority: 5
+#    timeout: 30.0
+#    max_tokens: 1024
+#
+#  - name: "openai"
+#    base_url: "https://api.openai.com/v1"
+#    model: "gpt-4o-mini"
+#    provider: "openai"
+#    api_key: "${OPENAI_API_KEY}"
+#    priority: 10
+#    timeout: 30.0
+#    max_tokens: 1024
+
+voice:
+  enabled: false
+  wake_word_engine: "vosk"
+  stt_engine: "vosk"
+  tts_engine: "piper"
+  vosk_model_path: ""
+  piper_model_path: ""
+  sample_rate: 16000
+
+safety:
+  blocklist_file: ""
+  max_input_length: 4096
+  max_output_length: 4096
+  system_prompt_template: "default"
+
+memory:
+  backend: "keyword"
+  max_facts_per_profile: 10000
+  retrieval_top_k: 5
+  embedding_model: "all-MiniLM-L6-v2"
+  extraction_mode: "auto"  # "auto" (LLM + regex fallback), "llm", or "regex"

@@ -1,0 +1,15 @@
+# Clawless Skill Manifest
+# List all skills that should be loaded at startup.
+# Only modules listed here will be imported — this is the allowlist.
+#
+# Format:
+#   skills:
+#     - module: "fully.qualified.module.path"
+#       class: "ClassName"
+#
+# The built-in SkillProposer is registered automatically and does not need
+# to be listed here.
+
+skills: []
+#  - module: "clawless.skills.example"
+#    class: "ExampleSkill"
