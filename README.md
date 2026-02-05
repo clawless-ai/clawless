@@ -1,3 +1,9 @@
+<p align="center">
+  <img src="docs/assets/clawless_logo.png" alt="Clawless Logo" width="200">
+  <br>
+  <em>Clawless runs flawless!</em>
+</p>
+
 # Clawless
 
 A minimal, restricted, memory-only agent framework for high-safety contexts — regulated enterprise assistants, education, and family companions.
@@ -114,7 +120,7 @@ User Input
 ### Directory Layout
 
 ```
-src/clawless/
+src/                             # maps to `clawless` package via package-dir
 ├── main.py              # Entry point, CLI args, component wiring
 ├── agent.py             # Core loop orchestrator
 ├── config.py            # Pydantic settings + YAML loading
