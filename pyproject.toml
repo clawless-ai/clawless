@@ -34,8 +34,19 @@ dev = [
 [project.scripts]
 clawless = "clawless.main:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools]
+packages = [
+    "clawless",
+    "clawless.channels",
+    "clawless.llm",
+    "clawless.memory",
+    "clawless.safety",
+    "clawless.skills",
+    "clawless.utils",
+]
+
+[tool.setuptools.package-dir]
+clawless = "src"
 
 [tool.ruff]
 line-length = 100

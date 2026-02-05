@@ -33,35 +33,34 @@ The framework is intentionally limited: the running agent can **never** modify i
 ## Folder Structure (in source / container image)
 
 /                              # project root
-├── src/
-│   └── clawless/              # core package (all functional domains)
-│       ├── init.py
-│       ├── main.py            # entry point + CLI args + channel selection
-│       ├── config.py          # pydantic settings + load default.yaml
-│       ├── types.py           # dataclasses: Session, Profile, BaseSkill, BaseTool
-│       ├── agent.py           # core loop: input → safety → llm → skills → memory → output
-│       │
-│       ├── memory/
-│       │   ├── manager.py     # per-profile short/long-term memory (jsonl + FAISS)
-│       │   └── extractor.py   # fact/preference extraction
-│       │
-│       ├── channels/
-│       │   ├── base.py
-│       │   ├── voice.py       # wake → faster-whisper → Piper
-│       │   └── text.py        # CLI / websocket / REST
-│       │
-│       ├── llm/
-│       │   └── router.py      # Either local or cloud, or combination
-│       │
-│       ├── safety/
-│       │   └── guard.py       # blocklist, prompt injection, system prompt template
-│       │
-│       ├── skills/
-│       │   ├── base.py        # abstract BaseSkill + BaseTool
-│       │   └── proposer.py    # built-in skill that generates new skill code → writes to proposals dir
-│       │
-│       └── utils/
-│           └── helpers.py
+├── src/                       # core package (maps to `clawless` via package-dir)
+│   ├── __init__.py
+│   ├── main.py                # entry point + CLI args + channel selection
+│   ├── config.py              # pydantic settings + load default.yaml
+│   ├── types.py               # dataclasses: Session, Profile, BaseSkill, BaseTool
+│   ├── agent.py               # core loop: input → safety → llm → skills → memory → output
+│   │
+│   ├── memory/
+│   │   ├── manager.py         # per-profile short/long-term memory (jsonl + FAISS)
+│   │   └── extractor.py       # fact/preference extraction
+│   │
+│   ├── channels/
+│   │   ├── base.py
+│   │   ├── voice.py           # wake → faster-whisper → Piper
+│   │   └── text.py            # CLI / websocket / REST
+│   │
+│   ├── llm/
+│   │   └── router.py          # Either local or cloud, or combination
+│   │
+│   ├── safety/
+│   │   └── guard.py           # blocklist, prompt injection, system prompt template
+│   │
+│   ├── skills/
+│   │   ├── base.py            # abstract BaseSkill + BaseTool
+│   │   └── proposer.py        # built-in skill that generates new skill code → writes to proposals dir
+│   │
+│   └── utils/
+│       └── helpers.py
 │
 ├── config/
 │   └── default.yaml           # LLM endpoints, voice models, default profiles, path overrides
