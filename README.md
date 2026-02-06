@@ -106,6 +106,14 @@ Options:
 
 ## Architecture
 
+<p align="center">
+  <img src="docs/assets/Clawless_Architecture.png" alt="Clawless Architecture — Distributed Agent Trust System" width="700">
+</p>
+
+The architecture separates the **User Agent** (write-only: memory and skill proposals) from the **Execution Domain** (execute-only: approved skills and config). A **Review Interface** gates all transitions — skills must be explicitly approved (by a human, hybrid, or agent reviewer) before they can run. This enforces the core invariant: the running agent can never modify its own code.
+
+### Request Pipeline
+
 ```
 User Input
   → Safety Guard (blocklist, prompt injection detection, length limits)
