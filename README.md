@@ -10,6 +10,14 @@ A minimal, restricted, memory-only agent framework for high-safety contexts — 
 
 The running agent can **never** modify its own code, configuration, or active skills. All persistent changes are either per-profile memory (facts, preferences stored as append-only JSONL) or human-approved skill proposals. Hence the name: *Clawless*.
 
+## Architecture
+
+<p align="center">
+  <img src="docs/assets/Clawless_Architecture.png" alt="Clawless Architecture — Distributed Agent Trust System" width="700">
+</p>
+
+The architecture separates the **User Agent** (write-only: memory and skill proposals) from the **Execution Domain** (execute-only: approved skills and config). A **Review Interface** gates all transitions — skills must be explicitly approved (by a human, hybrid, or agent reviewer) before they can run. This enforces the core invariant: the running agent can never modify its own code.
+
 ## Quick Start
 
 ```bash
@@ -103,14 +111,6 @@ Options:
   --data-dir       Override data directory
   --log-level      DEBUG, INFO, WARNING, or ERROR
 ```
-
-## Architecture
-
-<p align="center">
-  <img src="docs/assets/Clawless_Architecture.png" alt="Clawless Architecture — Distributed Agent Trust System" width="700">
-</p>
-
-The architecture separates the **User Agent** (write-only: memory and skill proposals) from the **Execution Domain** (execute-only: approved skills and config). A **Review Interface** gates all transitions — skills must be explicitly approved (by a human, hybrid, or agent reviewer) before they can run. This enforces the core invariant: the running agent can never modify its own code.
 
 ### Request Pipeline
 
