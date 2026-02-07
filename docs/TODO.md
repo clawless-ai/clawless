@@ -6,6 +6,7 @@ TODOs:
 - Rethink status names and approval process flow (e.g. distinguish between installed, approved)
 - Rethink actions e.g. distinguish betweeen approve,install,remove,delete
 - Rethink list command (e.g. proposals vs. installed)
+- Add testing loop for Implementer to test if the implemented skill works as intended and improve until it works. (How to do this without ending in an endless loop)? Check how OpenClaw handles this!!!
 
 UNSOLVED ISSUES:
 - Securely exchange API keys / secrets between user agent and admin without exposing it to external LLMs. For now, admin must set keys manually.

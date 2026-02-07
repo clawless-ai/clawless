@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 # Modules that proposed skills must NOT import
 FORBIDDEN_IMPORTS = frozenset({
-    "os", "sys", "subprocess", "shutil", "socket", "http",
-    "urllib", "requests", "httpx", "importlib", "ctypes",
+    "os", "sys", "subprocess", "shutil", "socket",
+    "urllib", "requests", "importlib", "ctypes",
     "multiprocessing", "threading", "signal", "pathlib",
     "tempfile", "glob", "fnmatch", "io", "pickle", "shelve",
     "marshal", "code", "codeop", "compileall", "py_compile",

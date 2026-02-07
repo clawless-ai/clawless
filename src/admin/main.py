@@ -36,9 +36,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--log-level",
-        default="INFO",
+        default="CRITICAL",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Log level (default: INFO)",
+        help="Log level (default: silent; use -v for INFO)",
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Enable verbose (INFO-level) logging",
     )
 
     subparsers = parser.add_subparsers(dest="command")
@@ -181,8 +186,11 @@ def _build_service(args: argparse.Namespace, need_llm: bool = True) -> tuple[Adm
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
 
+    log_level = args.log_level
+    if args.verbose and log_level == "CRITICAL":
+        log_level = "INFO"
     logging.basicConfig(
-        level=getattr(logging, args.log_level, logging.INFO),
+        level=getattr(logging, log_level, logging.CRITICAL),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )

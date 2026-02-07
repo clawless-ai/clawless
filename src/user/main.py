@@ -43,6 +43,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Log level override",
     )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Enable verbose (INFO-level) logging",
+    )
     return parser.parse_args(argv)
 
 
@@ -64,6 +69,8 @@ def main(argv: list[str] | None = None) -> None:
     # Apply CLI overrides
     if args.data_dir:
         settings.data_dir = args.data_dir
+    if args.verbose and not args.log_level:
+        settings.log_level = "INFO"
     if args.log_level:
         settings.log_level = args.log_level
 
