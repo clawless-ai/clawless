@@ -18,7 +18,7 @@ from typing import Any
 
 import httpx
 
-from clawless.config import LLMEndpoint
+from clawless.user.config import LLMEndpoint
 
 logger = logging.getLogger(__name__)
 

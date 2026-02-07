@@ -57,3 +57,6 @@ memory:
   retrieval_top_k: 5
   embedding_model: "all-MiniLM-L6-v2"
   extraction_mode: "auto"  # "auto" (LLM + regex fallback), "llm", or "regex"
+
+skills:
+  auto_propose: true  # auto-propose for explicit "learn how to X"; ask first for implicit gaps

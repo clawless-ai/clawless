@@ -1,0 +1,14 @@
+# Clawless System Profile — abstract capabilities only
+#
+# The user agent sees ONLY this file. It knows *what's possible* on this
+# system, never *how* (no device paths, package versions, etc.).
+#
+# The admin service has its own, more detailed system context.
+
+platform: raspberry_pi_4
+
+available_capabilities:
+  - audio_input
+  - audio_output
+  - gpio
+  - network

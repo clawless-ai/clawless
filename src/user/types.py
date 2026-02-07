@@ -1,11 +1,15 @@
-"""Core data types for Clawless."""
+"""Core data types for the Clawless user agent."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from clawless.user.llm import LLMRouter
 
 
 class Role(str, Enum):
@@ -75,3 +79,59 @@ class SkillResult:
     success: bool
     output: str
     data: dict[str, Any] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# New types for the event-based "everything is a skill" architecture
+# ---------------------------------------------------------------------------
+
+
+class SkillOrigin(str, Enum):
+    """How a skill was added to the system (metadata only, no runtime effect)."""
+
+    BUILTIN = "builtin"
+    PROPOSED = "proposed"
+
+
+@dataclass
+class Event:
+    """An event dispatched through the kernel to skills.
+
+    Skills communicate exclusively via events — they never hold direct
+    references to each other.
+    """
+
+    type: str  # "user_input", "memory_query", "memory_store", "skill_proposal", etc.
+    payload: str
+    source: str  # name of the skill that produced this event
+    session_id: str = ""
+    profile_id: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SystemProfile:
+    """Abstract system capabilities — NO implementation details.
+
+    The user agent only needs to know *what's possible* (e.g. "audio_input
+    available"), never *how* (no device paths, package versions, etc.).
+    """
+
+    platform: str  # e.g. "raspberry_pi_4"
+    available_capabilities: tuple[str, ...] = ()  # ("audio_input", "audio_output", ...)
+    active_skills: tuple[str, ...] = ()  # populated at boot from manifest
+    skill_descriptions: tuple[tuple[str, str], ...] = ()  # (name, description) pairs
+
+
+@dataclass(frozen=True)
+class KernelContext:
+    """Read-only bag of kernel services passed to every skill.
+
+    Frozen so skills cannot mutate shared state.
+    """
+
+    llm: LLMRouter
+    settings: Any  # Settings (avoid circular import)
+    system_profile: SystemProfile
+    dispatch: Callable[[Event], SkillResult | None]
+    data_dir: Path

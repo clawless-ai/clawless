@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from clawless.llm.router import LLMRouter
+    from clawless.user.llm import LLMRouter
 
 logger = logging.getLogger(__name__)
 

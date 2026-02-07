@@ -15,8 +15,8 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from clawless.types import MemoryEntry
-from clawless.utils.helpers import (
+from clawless.user.types import MemoryEntry
+from clawless.user.sandbox import (
     ensure_profile_dirs,
     safe_append_file,
     validate_profile_id,

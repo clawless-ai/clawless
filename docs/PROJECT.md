@@ -1,104 +1,345 @@
 # Clawless Design Document – February 2026
 
 ## Project Overview
-Clawless is a minimal, restricted, memory-only agent framework designed for high-safety contexts (regulated corporate/enterprise assistants, children/family companions, education). It supports voice and text interaction, persistent personalization via isolated memory writes, and controlled extensibility via a skill-proposer system gated by a formal review process.
 
-The framework is intentionally limited: the running agent can **never** modify its own code, configuration, or active skills (therefore "clawless"). All persistent changes are either per-profile memory (facts, preferences) or reviewed and approved skill proposals.
+Clawless is a minimal, safety-first agent framework designed for high-safety contexts (regulated enterprise assistants, children/family companions, education). The running agent can **never** modify its own code, configuration, or active skills (therefore "clawless").
 
-The agent is designed to start off with minimalistic capabilites (pre-baked basic skills, such as cli-communication which allows him to communicate with the user). From there it can evolve through proposed skills.
+The agent starts with minimal capabilities — just enough to communicate with the user and propose new skills. From there it evolves: users ask the agent to learn new capabilities, which are formalized into structured proposals, implemented by a privileged admin service, and activated only after human approval.
 
-The architecture follows a **Distributed Agent Trust System** with three zones — User Agent, Review Interface, and Execution Domain — each with strictly scoped capabilities.
+## Two-Agent Trust Architecture
 
-## Distributed Trust Architecture
-
-The system is divided into three trust zones. No zone can assume the responsibilities of another.
+The system is split into two agents with different privilege levels, connected by structured YAML proposals. The user agent never generates code and never sees system implementation details.
 
 ```
-┌─────────────────────┐                         ┌─────────────────────┐
-│   User Agent        │       Request           │  Execution Domain   │
-│   (Write Only)      │ ─ ─ ─ ─ ─ ─             │  (Execute Only)     │
-│                     │           |             │                     │
-│  ┌───────────────┐  │    ┌───────────────┐    │  ┌───────────────┐  │
-│  │ Proposed      │<─┼─ ─ │    Review     │─ ─>│  │  Approved     │  │
-│  │ Skills        │  │ Rej│  Interface*   │Appr│  │  Skills       │  │
-│  └───────────────┘  │    │               │    │  └───────────────┘  │
-│  ┌───────────────┐  │    │ Human|Hybrid| │    │  ┌───────────────┐  │
-│  │ Memory        │  │    │     Agent     │    │  │  Config       │  │
-│  └───────────────┘  │    └───────────────┘    │  └───────────────┘  │
-└─────────────────────┘            │            └─────────────────────┘
-                         Invoke / execute approved skills
+User ──→ [User Agent]  ──→  YAML proposal  ──→  [Admin Service]  ──→  [Human Admin]
+          low privilege       structured spec      has system access      final gate
+          no code gen         no code              implements + analyzes  approve/reject
+          user-facing         schema-validated      NOT user-facing
 ```
 
-*Each review must evaluate skills in the context of all currently approved skills to prevent composition attacks.
+### User Agent (low privilege, user-facing)
 
-### User Agent (Write Only)
+The user-facing process. All behavior — including communication itself — lives in skills dispatched by a minimal kernel.
 
-The running agent process. It interacts with the user, retrieves memory, calls the LLM, and dispatches to approved skills. Despite being the main process, its write capabilities are strictly bounded:
+- **Knows**: abstract system capabilities only ("audio_input available", not device paths or package versions)
+- **Can write**: memory entries (JSONL append), skill proposals (YAML to `data/proposals/`)
+- **Can read**: config, system profile (abstract), active skills via frozen registry
+- **Cannot**: generate code, access OS, run commands, discover system details, modify config or skills
+- **Attack surface**: user input → but even a fully compromised agent can only produce YAML specs
 
-- **Can write**: memory entries (JSONL append), session transcripts, skill proposals
-- **Can read**: config, approved skills (via the frozen registry), profile memory
-- **Can invoke**: skills already in the Execution Domain, through the SkillDispatcher
-- **Cannot**: promote proposals, modify config, load new skills at runtime, write outside the data sandbox
+### Admin Service (privileged, not user-facing)
 
-The User Agent and Execution Domain share a single OS process for performance (minimal hardware requirements, such as Pi 4). The trust boundary is enforced by the SkillRegistry being frozen after startup and all writes going through the path sandbox. User Agent is only able to invoke approved skills without knowledge of their secret keys (Execute Only). Each approved skill should be bundled with their respective secrets.
+A separate process (`cl-admin`) that runs as a continuous loop, polling for new proposals and driving them through a stateful pipeline.
 
-### Review Interface (Gate)
+- **Has**: full system access — installed packages, device paths, skill interface code, existing implementations
+- **Processes**: validated YAML proposals only (never arbitrary user input)
+- **Generates**: Python skill implementations from structured specs
+- **Runs**: AST safety analysis, composition analysis against active skills
+- **Presents**: full package (proposal + implementation + analysis) to human admin
+- **On approval**: installs skill to manifest, signals restart needed
 
-A **separate entry point** (`clawless-review` CLI or admin API) that operates on the proposals directory. It is never reachable from within the running agent process. This is the only path from "proposed" to "approved."
+### Human Admin
 
-Three reviewer modes:
+Reviews the admin service's output (spec + code + analysis report). Approves or rejects. Only gate that can activate skills.
 
-**Human** (MVP default): The review tool presents the proposal code, AST analysis results, and a composition report. The reviewer approves or rejects with a reason.
+## "Everything Is a Skill"
 
-**Hybrid**: Automated checks run first — AST analysis, import scanning, capability validation, composition analysis. Results are presented to the human reviewer alongside the code. If automated checks fail, the proposal is flagged with specific warnings. The human makes the final decision.
+The core agent is reduced to a minimal kernel. All user-facing behavior lives in skills:
 
-**Agent**: A separate LLM evaluation with a safety-focused system prompt. Restricted to skills matching pre-approved templates that don't declare high-risk capabilities. The agent reviewer's decisions are logged and auditable. Configurable via `review.auto_approve_categories` in config.
+- **CLI communication** — pure I/O: reading stdin, printing responses
+- **Reasoning** — conversation pipeline: prompt building, LLM calls, intent routing, capability gap detection
+- **Memory** — storing and retrieving facts about the user
+- **Skill proposer** — formalizing user requests into YAML proposals
 
-All three modes produce the same output: a review decision with metadata, written as a sidecar file and appended to the audit log.
+The kernel provides only: event dispatch, capability enforcement, safety filtering, path sandboxing, and LLM routing. It does not contain conversation logic, I/O, memory, persona loading, or prompt building.
 
-Once a decision is ready to be made, the review service should be able to notify the admin e.g. via e-mail with instructions on how to proceed (reject or accept).
+### Core Skills (4 builtin)
 
-### Execution Domain (Execute Only)
+**`cli`** — Pure I/O driver. Owns the stdin/stdout event loop. Dispatches `user_input` events to the reasoning skill and prints the returned responses. A future voice skill would replace this with audio I/O.
+- Capabilities: `user:input`, `user:output`
 
-Contains approved skills and configuration. Immutable at runtime — changes require a restart.
+**`reasoning`** — Conversation pipeline and intent routing. Handles `user_input` events: assembles context (memory, persona, skill descriptions), calls the LLM, parses the response for action directives, dispatches skill events, and manages memory storage. The LLM is made aware of available skills and can detect capability gaps — offering to propose new skills in any language.
+- Capabilities: `llm:call`, `memory:read`, `memory:write`
 
-- **SkillRegistry**: Populated once at startup from `skills_manifest.yaml`. Frozen immediately after. The agent invokes skills through a `SkillDispatcher` that validates the skill is registered and the invocation parameters match the skill's declared interface.
-- **Config**: Loaded once at startup. Read-only thereafter.
+**`memory`** — Handles memory storage and retrieval. Wraps JSONL manager and LLM/regex fact extraction. Runs extraction in background thread.
+- Capabilities: `memory:read`, `memory:write`, `llm:call`
 
-The Execution Domain cannot be written to by the agent process. New skills enter only through the Review Interface promoting proposals and a subsequent restart.
+**`proposer`** — Triggered via the reasoning skill when the LLM detects a skill proposal intent. Consults abstract system profile for feasibility. Generates structured YAML proposals — never code.
+- Capabilities: `llm:call`, `file:write`
 
-## Skill Capability Model
+### Graceful Degradation
 
-Each skill declares its capabilities in its class definition:
+If the `memory` skill is not loaded, the reasoning skill still works — it just gets no memory context. The kernel returns `None` for unhandled events and the reasoning skill handles this gracefully.
+
+## Minimal Kernel
+
+The kernel (~80-100 lines) is the irreducible core — things that cannot be skills because they are prerequisites for skills to function.
+
+**Contains:**
+- **SkillRegistry** — loads skills from manifest at startup, freezes immediately
+- **Dispatcher** — receives events, routes to matching skills, enforces capability checks
+- **SafetyGuard** — non-negotiable input/output filtering, prompt injection detection
+- **Path sandbox** — write enforcement to `profiles/` and `proposals/` subdirs only
+- **LLM Router** — shared service for LLM calls (priority-based fallback)
+- **KernelContext** — frozen read-only bag of shared services passed to all skills
+
+### Boot Sequence
+
+1. Load config + system profile (abstract capabilities only)
+2. Load skills from manifest into registry, freeze
+3. Validate: at least one skill with `user:input` capability exists
+4. Call `on_load(ctx)` on all skills
+5. Call `run(ctx)` on the communication driver skill
+
+## Event-Based Skill Interface
+
+Skills communicate through events dispatched via the kernel. No skill holds a direct reference to another.
+
+### Event
 
 ```python
-class MySkill(BaseSkill):
-    name = "my_skill"
-    capabilities = ["memory:read", "network:read"]
-    triggers = ["look up", "search for"]
+@dataclass
+class Event:
+    type: str          # "user_input", "memory_query", "skill_proposal", etc.
+    payload: str       # primary content
+    source: str        # producing skill name
+    session_id: str
+    profile_id: str
+    metadata: dict
 ```
 
-Standard capability tokens:
-- `memory:read`, `memory:write` — access to profile memory
-- `network:read`, `network:write` — HTTP/external API access
-- `file:read`, `file:write` — filesystem access (within sandbox)
-- `llm:call` — ability to make LLM requests
-- `user:output` — direct output to the user
+Standard event types (MVP):
+- `user_input` — user said something (produced by communication skills)
+- `memory_query` — retrieve relevant memories
+- `memory_store` — store fact/preference/persona
+- `skill_proposal` — user wants a new skill
 
-Capabilities serve two purposes:
-1. **Review-time validation**: AST analysis checks that the code only uses APIs consistent with its declared capabilities (e.g., a skill declaring only `memory:read` should not import `httpx`).
-2. **Composition analysis**: The `CompositionAnalyzer` checks capability pairs across all approved skills for dangerous combinations.
+New event types can be added by new skills without kernel changes.
+
+### KernelContext
+
+```python
+@dataclass(frozen=True)
+class KernelContext:
+    llm: LLMRouter
+    settings: Settings
+    system_profile: SystemProfile   # abstract capabilities only
+    dispatch: Callable[[Event], SkillResult | None]
+    data_dir: Path
+```
+
+### BaseSkill
+
+```python
+class BaseSkill(ABC):
+    name: str
+    description: str
+    version: str
+    origin: SkillOrigin              # "builtin" or "proposed" (metadata only)
+    capabilities: frozenset[str]     # declared capability tokens
+    handles_events: list[str]        # event types this skill responds to
+    dependencies: list[str]          # required skill names
+
+    def on_load(self, ctx: KernelContext) -> None: ...
+    def handle(self, event: Event, ctx: KernelContext) -> SkillResult | None: ...
+    def on_unload(self) -> None: ...
+    def run(self, ctx: KernelContext) -> None: ...  # for driver skills only
+```
+
+Skills interact **only** through `ctx.dispatch()` — never hold direct references to each other.
+
+## Capability Tokens
+
+The actual security enforcement mechanism. The kernel checks at runtime that a skill only dispatches events requiring capabilities it has declared.
+
+```
+user:input, user:output     — communication with user
+memory:read, memory:write   — profile memory store
+llm:call                    — invoke LLM router
+file:write                  — write to data sandbox (proposals/ only)
+audio:read, audio:write     — microphone/speaker
+gpio:read, gpio:write       — hardware pins
+network:read, network:write — outbound HTTP
+```
+
+### Skill Origin Labels (metadata only, no runtime enforcement)
+
+```python
+class SkillOrigin(Enum):
+    BUILTIN = "builtin"      # ships with the project
+    PROPOSED = "proposed"    # added through proposal → admin → human pipeline
+```
+
+Informational labels for human readability. The kernel does not treat skills differently based on origin. Security comes entirely from capability tokens + the admin review gate.
+
+## System Knowledge Model
+
+### User Agent sees (abstract only)
+
+Generated once at install time by `clawless-setup`, stored as `config/system_profile.yaml`, frozen thereafter. The agent never runs system commands.
+
+```yaml
+platform: raspberry_pi_4
+available_capabilities:
+  - audio_input
+  - audio_output
+  - gpio
+  - network
+active_skills:
+  - cli
+  - memory
+  - proposer
+```
+
+No package lists, no versions, no device paths, no file layout. Enough to say "this system can do audio" but not enough to write implementation code.
+
+### Admin Service sees (full system context)
+
+Internal to the admin service — never exposed to the user agent:
+
+```yaml
+python_version: "3.11.2"
+installed_packages: [vosk, sounddevice, piper-tts, numpy, ...]
+device_paths:
+  audio_input: "/dev/snd/pcmC1D0c"
+  audio_output: "/dev/snd/pcmC0D0p"
+skill_interface: "BaseSkill from clawless.user.skills.base"
+existing_skill_code: [...]
+```
+
+This separation means: even if the user agent is fully prompt-injected, the attacker learns "there's a Pi with audio" — not how to exploit it.
+
+## Skill Proposal Format
+
+The user agent generates YAML proposals only — no code. The proposal expresses *what* and *why*, never *how*.
+
+```yaml
+# data/proposals/proposed_voice_comm_20260207_143000.yaml
+proposal:
+  name: voice-communication
+  description: "Communicate with the user via voice using local STT and TTS"
+  capabilities:
+    - user:input
+    - user:output
+    - audio:read
+    - audio:write
+  dependencies:
+    - memory
+  handles_events:
+    - user_input
+    - assistant_output
+  requirements:
+    system_capabilities:
+      - audio_input
+      - audio_output
+  rationale: |
+    The user asked the agent to learn voice communication. This skill would
+    replace cli as the primary interface, enabling hands-free interaction
+    using the available audio hardware.
+  user_context: |
+    User said: "I'd like to talk to you by voice instead of typing.
+    I have a microphone attached to my Pi."
+  generated_by: proposer
+  generated_at: "2026-02-07T14:30:00Z"
+  profile_id: default
+
+# Status tracking — managed by admin service (user agent only writes status: new)
+status: new
+history:
+  - timestamp: "2026-02-07T14:30:00Z"
+    status: new
+    actor: proposer
+```
+
+## Admin Service — Stateful Pipeline with Configurable Gates
+
+The admin service (`cl-admin`) runs as a continuous loop, polling `data/proposals/` for new proposals and driving them through a status pipeline. Each status transition can be configured to require human approval or proceed automatically.
+
+### Proposal Status Lifecycle
+
+```
+new → discovered → implementation → agent-review → human-review → accepted
+                                                                → rejected
+```
+
+| Status | What happens | Default gate |
+|--------|-------------|--------------|
+| `new` | Proposal written by user agent | — |
+| `discovered` | Admin service found it, validated YAML schema + capability tokens | auto |
+| `implementation` | Admin service generates Python code from spec via LLM (full system context) | auto |
+| `agent-review` | AST safety analysis + composition check against active skills | auto |
+| `human-review` | Full package presented for human approval | **human** |
+| `accepted` | Skill installed to manifest, restart signaled | — |
+| `rejected` | Rejected at any stage, reason recorded in history | — |
+
+Status is tracked directly in the proposal YAML file (`status` field + `history` log).
+
+### Configurable Gates
+
+Admin service config (`config/admin.yaml`) defines which transitions pause for human approval:
+
+```yaml
+poll_interval_seconds: 30
+mode: interactive          # "interactive" (CLI prompts) or "headless" (notifications only)
+
+gates:
+  discovered: auto         # auto-validate schema and proceed
+  implementation: auto     # auto-generate code and proceed
+  agent-review: auto       # auto-run analysis, proceed if clean
+  human-review: human      # always require human approval here
+
+notifier: cli              # "cli" (MVP), "email", "webhook", etc.
+```
+
+### Notification Abstraction
+
+Designed for extensibility, MVP implements CLI only:
+
+```python
+class Notifier(ABC):
+    def notify(self, proposal: dict, status: str, message: str) -> None: ...
+    def request_approval(self, proposal: dict, status: str, context: dict) -> bool: ...
+
+class CLINotifier(Notifier):
+    """MVP: prints summary to terminal, prompts for proceed/reject."""
+```
+
+Future: `EmailNotifier`, `WebhookNotifier`, etc.
+
+### What the Human Sees (interactive mode)
+
+```
+═══════════════════════════════════════════════════
+  SKILL PROPOSAL: voice-communication
+═══════════════════════════════════════════════════
+
+  PROPOSAL (user intent):
+    Communicate via voice using local STT/TTS
+    Capabilities: user:input, user:output, audio:read, audio:write
+    Dependencies: memory
+
+  GENERATED IMPLEMENTATION:
+    src/user/skills/voice/skill.py (47 lines)
+    [code preview]
+
+  ANALYSIS:
+    AST scan: CLEAN (no forbidden imports/builtins)
+    Composition: WARNING — adds audio:write alongside existing memory:read
+    Recommendation: APPROVE WITH NOTE
+
+  [A]pprove  [R]eject  [V]iew full code  [Q]uit
+═══════════════════════════════════════════════════
+```
 
 ## Composition Attack Prevention
 
-Individually safe skills can become dangerous in combination. Example: Skill A declares `file:read`, Skill B declares `network:write`. Together, they enable data exfiltration if the agent chains their outputs.
+Individually safe skills can become dangerous in combination. Example: Skill A declares `file:read`, Skill B declares `network:write`. Together, they enable data exfiltration.
 
-The `CompositionAnalyzer` runs during review and checks:
-- **Capability escalation pairs**: configurable rules mapping dangerous combinations (e.g., any `*:read` + `network:write` flags as potential exfiltration)
-- **Data flow paths**: whether one skill's output type matches another skill's input type, creating implicit pipelines
-- **Cumulative privilege**: whether the combined capability set of all approved skills exceeds a configured threshold
+The `CompositionAnalyzer` (in the admin service) runs during review and checks:
+- **Capability escalation pairs**: configurable rules mapping dangerous combinations
+- **Cumulative privilege**: whether the combined capability set of all active skills exceeds a threshold
 
-Rules are defined in `config/composition_rules.yaml`:
+Rules defined in `config/composition_rules.yaml`:
 
 ```yaml
 escalation_pairs:
@@ -108,183 +349,98 @@ escalation_pairs:
 max_total_capabilities: 8
 ```
 
-This is a lightweight rule-based check — no ML, runs instantly on Pi 4.
+Lightweight rule-based check — no ML, runs instantly on Pi 4.
 
-## Core Security & Safety Invariants (non-negotiable)
+## Core Security Invariants (non-negotiable)
 
-1. The running agent process may **only write** to locations inside a single configurable data directory (`CLAWLESS_DATA_DIR`, default `/data` in containers).
-   - Allowed subpaths:
-     - `/data/profiles/{profile_id}/memory/` (facts.jsonl, preferences.jsonl)
-     - `/data/profiles/{profile_id}/sessions/` (optional session transcripts)
-     - `/data/proposals/` (agent-generated skill proposals and review metadata)
-   - All other paths are **strictly forbidden** — raise exception on any attempt.
-2. No `eval`, `exec`, `compile`, runtime `importlib.import_module`, `subprocess`, `os.system`, or dynamic code loading.
-3. Code, configuration files, and enabled skills are **read-only** after startup. The SkillRegistry is frozen immediately after loading.
-4. Skill activation requires passage through the Review Interface. The MVP requires explicit human approval. Hybrid and agent review modes may be enabled for specific skill categories with appropriate safeguards.
+1. The user agent process may **only write** to `profiles/` and `proposals/` subdirs within `CLAWLESS_DATA_DIR`. All writes go through path sandbox validation.
+2. No `eval`, `exec`, `compile`, `subprocess`, `os.system`, or dynamic code loading in the user agent. The only `importlib.import_module` usage is for loading skills from the manifest at startup.
+3. Code, configuration, and active skills are **read-only** after startup. The SkillRegistry is frozen immediately after loading.
+4. Skill activation requires passage through the admin service pipeline. The MVP requires explicit human approval at the `human-review` gate.
 5. Run as non-root user, read-only root filesystem, single writable volume in production/container deployments.
-6. Skill reviews must evaluate the proposed skill in the context of all currently approved skills to prevent composition attacks. The CompositionAnalyzer must pass before any approval.
-7. The Review Interface is a separate entry point — never callable from within the running agent process.
+6. The admin service is a separate process — never callable from within the user agent process.
+7. The user agent never generates code and never sees system implementation details (package lists, device paths, file layout).
 
-## Skill Lifecycle
+## Package Layout
 
-```
-1. User asks agent to learn a new capability
-       ↓
-2. Agent's SkillProposer generates a BaseSkill subclass
-   with capability declarations → writes to /data/proposals/
-       ↓
-3. Reviewer invokes `clawless-review list` (separate process)
-       ↓
-4. Review Interface runs automated analysis:
-   - AST scan (no forbidden imports/calls)
-   - Capability validation (declared caps match code behavior)
-   - Composition analysis (new caps + existing caps → safe?)
-       ↓
-5. Review decision (per configured mode):
-   - Human: reviewer reads report + code, approves/rejects
-   - Hybrid: auto-checks gate, human confirms
-   - Agent: LLM evaluates (restricted categories only)
-       ↓
-6a. APPROVED → skill copied to skills/enabled/,
-    manifest updated, restart required
-       ↓
-6b. REJECTED → sidecar .review.yaml written with reason,
-    agent can query status and revise (new proposal file)
-```
-
-Rejected proposals remain in `/data/proposals/` with review metadata as an audit trail. The agent may generate a revised proposal (as a new file — never modifying the original), preserving the append-only principle. Once the user agent detects a skill rejection he should notify the user about the rejection including rejection reason.
-
-## Deployment & Containment Model
-- **Local development**: Code and data can live together; `CLAWLESS_DATA_DIR` defaults to `./data` if not set.
-- **Production / business servers / containers**:
-  - Code is immutable (in the container image).
-  - All persistent state lives in a single mounted volume at `/data` (or env-defined path).
-  - Dockerfile must:
-    - Create non-root user
-    - `mkdir -p /data && chown appuser:appuser /data`
-    - `VOLUME /data`
-    - Run with `--read-only --tmpfs /tmp`
-    - Set `CLAWLESS_DATA_DIR=/data`
-- This follows 2026 best practices (Docker, Kubernetes security contexts, OWASP, CIS benchmarks).
-
-## Folder Structure (in source / container image)
+Trust boundary is visible in the directory structure. No single-file-in-a-folder packages. Every skill is a sub-package.
 
 ```
-/                              # project root
-├── src/                       # core package (maps to `clawless` via package-dir)
+src/
+├── user/                              # USER AGENT — low privilege, user-facing
 │   ├── __init__.py
-│   ├── main.py                # entry point + CLI args + channel selection
-│   ├── config.py              # pydantic settings + load default.yaml
-│   ├── types.py               # dataclasses: Session, Profile, MemoryEntry
-│   ├── agent.py               # core loop: input → safety → llm → skills → memory → output
-│   │
-│   ├── memory/
-│   │   ├── manager.py         # per-profile JSONL store + keyword/FAISS retrieval
-│   │   └── extractor.py       # fact/preference extraction (regex + LLM)
-│   │
-│   ├── channels/
-│   │   ├── base.py            # abstract channel interface
-│   │   ├── voice.py           # wake → Vosk STT → Piper TTS
-│   │   └── text.py            # CLI stdin/stdout
-│   │
-│   ├── llm/
-│   │   └── router.py          # abstract LLMProvider + OpenAI-compatible adapter + fallback
-│   │
-│   ├── safety/
-│   │   └── guard.py           # blocklist, prompt injection detection, system prompt
-│   │
-│   ├── skills/
-│   │   ├── base.py            # BaseSkill, BaseTool, SkillRegistry (freezable), SkillDispatcher
-│   │   └── proposer.py        # generates BaseSkill subclasses → writes to proposals dir
-│   │
-│   ├── review/
-│   │   ├── interface.py       # review CLI entry point: list, approve, reject, show
-│   │   ├── analyzers.py       # AST scanner, import checker, capability validator
-│   │   └── composition.py     # CompositionAnalyzer — rule-based escalation pair detection
-│   │
-│   └── utils/
-│       └── helpers.py         # path sandbox — all writes validated here
+│   ├── main.py                        # entry point: cl-bot
+│   ├── kernel.py                      # dispatcher, boot validation (~80 lines)
+│   ├── types.py                       # Event, SkillOrigin, SystemProfile, KernelContext
+│   ├── config.py                      # settings + system profile loading
+│   ├── guard.py                       # input/output safety filtering
+│   ├── sandbox.py                     # path write enforcement
+│   ├── llm.py                         # LLM router + provider abstraction
+│   └── skills/
+│       ├── __init__.py
+│       ├── base.py                    # BaseSkill, SkillRegistry, manifest loader
+│       ├── cli/                       # CLI communication (pure I/O)
+│       │   ├── __init__.py
+│       │   └── skill.py
+│       ├── reasoning/                 # Conversation pipeline + intent routing
+│       │   ├── __init__.py
+│       │   └── skill.py
+│       ├── memory/                    # Memory skill
+│       │   ├── __init__.py
+│       │   ├── skill.py              # event handlers
+│       │   ├── manager.py            # JSONL storage + keyword retrieval
+│       │   └── extractor.py          # LLM/regex fact extraction
+│       └── proposer/                  # Skill proposer
+│           ├── __init__.py
+│           └── skill.py              # YAML-only proposal generation
 │
-├── config/
-│   ├── default.yaml           # LLM endpoints, voice, safety, memory, review settings
-│   ├── skills_manifest.yaml   # skill allowlist (loaded at startup, frozen)
-│   └── composition_rules.yaml # capability escalation pairs + thresholds
-│
-├── Dockerfile                 # non-root, read-only FS, /data volume
-├── pyproject.toml
-└── README.md
+└── admin/                             # ADMIN SERVICE — privileged, not user-facing
+    ├── __init__.py
+    ├── main.py                        # entry point: cl-admin
+    ├── service.py                     # pipeline loop, status transitions, gate checks
+    ├── implementer.py                 # code generation from spec (has system access)
+    ├── analyzer.py                    # AST analysis + composition checks
+    └── notifier.py                    # Notifier ABC + CLINotifier
+
+config/
+├── default.yaml                       # LLM endpoints, safety, memory settings
+├── admin.yaml                         # gate config, poll interval, mode, notifier
+├── system_profile.yaml                # abstract capabilities (user agent)
+├── skills_manifest.yaml               # skill allowlist (loaded at startup, frozen)
+├── composition_rules.yaml             # capability escalation pairs + thresholds
+└── persona.default.md                 # default persona template
 ```
 
-**Runtime writable data directory** (outside image, mounted volume):
+**Import rule:** `admin` may import from `user` (needs skill interface, types). `user` must NEVER import from `admin`.
+
+## Runtime Data Directory
 
 ```
-/data/
+data/
 ├── profiles/
 │   └── {profile_id}/
-│       ├── memory/            # facts.jsonl, preferences.jsonl
-│       └── sessions/          # session transcripts
-├── proposals/
-│   ├── proposed_{name}_{ts}.py            # agent-generated skill code
-│   └── proposed_{name}_{ts}.review.yaml   # review decision + metadata
-└── audit/
-    └── reviews.jsonl          # append-only log of all review decisions
+│       ├── persona.md
+│       ├── memory/
+│       │   └── entries.jsonl
+│       └── logs/
+└── proposals/
+    └── proposed_{name}_{ts}.yaml      # YAML proposals (no code)
 ```
 
-## Tech Stack (minimal)
+## Tech Stack
+
 - Python 3.11+
 - LLM: Configurable (any OpenAI-compatible API via abstract LLMProvider + adapter)
-- Voice: Vosk (default STT) / Porcupine (wake word) → Piper (TTS)
-- Memory: JSONL append + keyword matching (default) or sentence-transformers + FAISS (optional)
-- Audio: sounddevice + numpy
+- Voice: Vosk (STT) / Piper (TTS) — added as a skill via proposal pipeline
+- Memory: JSONL append + keyword matching (default); FAISS optional
 - Config: Pydantic v2 + PyYAML
-- HTTP: httpx (async-capable)
-- Assumed default hardware: Raspberry Pi 4 + ReSpeaker 2-Mic HAT
+- HTTP: httpx
+- Target hardware: Raspberry Pi 4 + ReSpeaker 2-Mic HAT
 
-## MVP Functionality
-- Dual channels (voice + text)
-- Per-profile memory isolation
-- LLM routing with priority-based fallback
-- Safety guardrails (system prompt + blocklist + prompt injection detection)
-- Skill system with BaseSkill interface and capability declarations
-- Skill proposer (generates complete .py files → writes only to `/data/proposals/`)
-- Review Interface with human-only mode (MVP), extensible to hybrid/agent review
-  - AST analysis and composition checks run in all modes
-  - `clawless-review` CLI as the separate entry point
-- Rejection flow with metadata and agent re-proposal capability
+## Deployment
 
-## Configuration Additions
-
-The following config keys support the review system (in `default.yaml`):
-
-```yaml
-review:
-  mode: "human"                    # "human", "hybrid", or "agent"
-  auto_approve_categories: []      # skill categories agent review may approve
-  require_ast_pass: true           # automated checks must pass before human review
-  composition_rules: "config/composition_rules.yaml"
-```
-
-## Implementation Steps
-
-Start building step-by-step. Keep files small (<300 lines where possible).
-
-1. Create folder structure
-2. Add `Dockerfile` with non-root user, /data volume, read-only FS
-3. Implement `config.py` + `default.yaml` + data dir resolution
-4. Implement path validation utilities (`utils/helpers.py` — all writes through sandbox)
-5. `types.py` — Session, Profile, MemoryEntry, ReviewDecision
-6. `skills/base.py` — BaseSkill with capability declarations, SkillRegistry (freezable), SkillDispatcher
-7. `skills/proposer.py` — generate skill code with capability declarations → safe write to proposals dir
-8. `review/analyzers.py` — AST scanner, import checker, capability validator
-9. `review/composition.py` — CompositionAnalyzer with rule-based escalation detection
-10. `review/interface.py` — review CLI: list, analyze, approve, reject
-11. `config/composition_rules.yaml` — default escalation pair rules
-12. `memory/manager.py` — JSONL append + keyword retrieval, path-safe
-13. `memory/extractor.py` — fact/preference extraction
-14. `safety/guard.py` — blocklist, prompt injection, system prompt
-15. `agent.py` — core loop (input → safety → memory → LLM → skill dispatch → memory → output)
-16. `channels/text.py` — CLI channel
-17. `main.py` — entry point, profile selection, registry freeze
-18. Wire `clawless-review` as a separate console_scripts entry point in pyproject.toml
-
-Prioritize safety checks, trust boundaries, and container-ready defaults.
+- **Local development**: Code and data together; `CLAWLESS_DATA_DIR` defaults to `./data`
+- **Production / containers**:
+  - Code immutable (in container image)
+  - Persistent state in single mounted volume at `/data`
+  - Dockerfile: non-root user, `--read-only --tmpfs /tmp`, `VOLUME /data`

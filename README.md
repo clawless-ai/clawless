@@ -6,72 +6,134 @@
 
 # Clawless
 
-A minimal, restricted, memory-only agent framework for high-safety contexts — regulated enterprise assistants, education, and family companions.
+A safety-first agent framework where **everything is a skill**. Designed for high-safety contexts — regulated enterprise assistants, education, and family companions.
 
-The running agent can **never** modify its own code, configuration, or active skills. All persistent changes are either per-profile memory (facts, preferences stored as append-only JSONL) or human-approved skill proposals. Hence the name: *Clawless*.
+The running agent can **never** modify its own code, configuration, or active skills. All persistent changes are either per-profile memory (append-only JSONL) or human-approved skill proposals. Hence the name: *Clawless*.
+
+## How It Works
+
+<p align="center">
+  <img src="docs/assets/Clawless_Architecture.png" alt="Clawless Architecture" width="700">
+</p>
+
+Clawless splits into two processes with different privilege levels:
+
+```
+User ──→ [User Agent (cl-bot)]  ──→  YAML proposal  ──→  [Admin Service (cl-admin)]  ──→  [Human Admin]
+          low privilege            structured spec      has system access               final gate
+          no code gen              no code              implements + analyzes           approve/reject
+```
+
+The **user agent** starts minimal — just enough to communicate via CLI and propose new skills. Users ask it to learn new capabilities ("learn how to use voice"), which become structured YAML proposals. The **admin service** implements the code, runs safety analysis, and presents it for human approval. Only then does the skill activate.
+
+## Quick Start
+
+```bash
+# Clone and install
+git clone https://github.com/youruser/clawless.git
+cd clawless
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+
+# Configure an LLM endpoint
+cp config/default.yaml.example config/default.yaml
+# Edit config/default.yaml — set your API key:
+#   api_key: "${OPENAI_API_KEY}"
+# Then export the env var:
+export OPENAI_API_KEY="sk-..."
+
+# Run the user agent
+cl-bot
+```
 
 ## Architecture
 
-<p align="center">
-  <img src="docs/assets/Clawless_Architecture.png" alt="Clawless Architecture — Distributed Agent Trust System" width="700">
-</p>
+The core agent is a minimal **kernel** (~100 lines) that dispatches events between skills and enforces capability tokens. All user-facing behavior lives in skills:
 
-The architecture separates the **User Agent** (write-only: memory and skill proposals) from the **Execution Domain** (execute-only: approved skills and config). A **Review Interface** gates all transitions — skills must be explicitly approved (by a human, hybrid, or agent reviewer) before they can run. This enforces the core invariant: the running agent can never modify its own code.
+| Skill | What it does | Capabilities |
+|-------|-------------|-------------|
+| `cli` | stdin/stdout I/O loop — reads input, prints output | `user:input`, `user:output` |
+| `reasoning` | Conversation pipeline — prompt building, LLM calls, intent routing, capability gap detection | `llm:call`, `memory:read`, `memory:write` |
+| `memory` | Stores/retrieves facts, preferences, persona adjustments (JSONL) | `memory:read`, `memory:write`, `llm:call` |
+| `skill-proposer` | Generates YAML skill proposals from user requests (never code) | `llm:call`, `file:write` |
 
-## Roadmap
+Skills communicate via **events** dispatched through the kernel. No skill holds a direct reference to another. The kernel enforces **capability tokens** at runtime — a skill can only dispatch events requiring capabilities it has declared.
 
-High-level implementation milestones derived from the [design document](docs/PROJECT.md).
+### Two-Agent Trust Model
 
-### Foundation
-- [ ] `config.py` — Pydantic settings, YAML loading, `CLAWLESS_DATA_DIR` resolution
-- [ ] `types.py` — Session, Profile, MemoryEntry, ReviewDecision, CapabilityToken
-- [ ] `utils/helpers.py` — path sandbox (`resolve_safe_write_path`), profile ID validation
-- [ ] `config/default.yaml` — full config schema including `review` section
-- [ ] Dockerfile — non-root user, read-only FS, `/data` volume
+**User Agent** (`cl-bot`) — low privilege, user-facing. Knows only abstract system capabilities ("audio_input available", not device paths). Produces YAML proposals, never code. Even fully compromised, it can only output structured specs.
 
-### Execution Domain (Execute Only)
-- [ ] `skills/base.py` — BaseSkill with capability declarations, SkillRegistry (freezable), SkillDispatcher
-- [ ] `config/skills_manifest.yaml` — skill allowlist, loaded once at startup
-- [ ] Registry freeze — SkillRegistry becomes immutable after `main.py` startup completes
+**Admin Service** (`cl-admin`) — privileged, not user-facing. Has full system access. Generates implementations from specs, runs AST safety analysis + composition checks, presents the full package for human approval.
 
-### User Agent Core (Write Only)
-- [ ] `safety/guard.py` — blocklist, prompt injection detection, input/output length limits
-- [ ] `memory/manager.py` — per-profile JSONL store, keyword retrieval (FAISS optional)
-- [ ] `memory/extractor.py` — fact/preference extraction (regex + LLM)
-- [ ] `llm/router.py` — abstract LLMProvider, OpenAI-compatible adapter, priority-based fallback
-- [ ] `agent.py` — core loop: input → safety → memory → LLM → skill dispatch → memory → output
-- [ ] `channels/text.py` — CLI stdin/stdout channel
-- [ ] `main.py` — entry point, profile selection, component wiring, registry freeze
+```bash
+# Start the admin service (polls for new proposals)
+cl-admin
 
-### Skill Proposal System
-- [ ] `skills/proposer.py` — generate BaseSkill subclasses with capability declarations
-- [ ] Proposal output to `/data/proposals/proposed_{name}_{ts}.py`
-- [ ] Skill secrets bundled per approved skill (agent never sees raw keys)
+# Or process pending proposals once and exit
+cl-admin --once
+```
 
-### Review Interface (Gate)
-- [ ] `review/analyzers.py` — AST scanner, import checker, capability validator
-- [ ] `review/composition.py` — CompositionAnalyzer (rule-based escalation pair detection)
-- [ ] `config/composition_rules.yaml` — default escalation pairs and thresholds
-- [ ] `review/interface.py` — `clawless-review` CLI: list, analyze, approve, reject
-- [ ] Review sidecar files — `.review.yaml` metadata per proposal
-- [ ] Audit log — append-only `reviews.jsonl`
-- [ ] Admin notification — email/webhook when a review decision is pending
-- [ ] Wire `clawless-review` as separate `console_scripts` entry point in `pyproject.toml`
+### Proposal Pipeline
 
-### Rejection & Feedback Loop
-- [ ] Rejection metadata written to sidecar `.review.yaml` with reason
-- [ ] Agent detects rejection and notifies user with reason
-- [ ] Agent can revise and re-propose (new file, append-only)
+```
+new → discovered → implementation → agent-review → human-review → accepted/rejected
+```
 
-### Voice Channel
-- [ ] `channels/voice.py` — Vosk STT, Piper TTS, wake word detection
-- [ ] Audio I/O via sounddevice + numpy
+Each status transition can be configured in `config/admin.yaml` to require human approval (`human`) or proceed automatically (`auto`). The `human-review` gate always requires human approval by default.
 
-### Hardening & Production
-- [ ] Hybrid review mode — automated checks gate human sign-off
-- [ ] Agent review mode — LLM evaluation for pre-approved template categories
-- [ ] Composition analysis against full approved skill set on every review
-- [ ] Container deployment validation (read-only rootfs, non-root, single volume)
+## Configuration
+
+| File | Purpose |
+|------|---------|
+| `config/default.yaml` | LLM endpoints, safety, memory settings |
+| `config/system_profile.yaml` | Abstract system capabilities (what the user agent sees) |
+| `config/skills_manifest.yaml` | Skill allowlist — loaded at startup, frozen |
+| `config/admin.yaml` | Admin service: gate config, poll interval, mode |
+
+API keys use `${ENV_VAR}` syntax — the LLM router resolves them from environment variables at runtime. Never commit actual keys.
+
+## Project Structure
+
+```
+src/
+├── user/                     # User agent (low privilege)
+│   ├── main.py               # Entry point: cl-bot
+│   ├── kernel.py             # Event dispatcher + boot
+│   ├── types.py              # Event, KernelContext, SystemProfile
+│   ├── config.py             # Settings + system profile loading
+│   ├── guard.py              # Input/output safety filtering
+│   ├── sandbox.py            # Path write enforcement
+│   ├── llm.py                # LLM router + providers
+│   └── skills/
+│       ├── base.py           # BaseSkill, SkillRegistry
+│       ├── cli/              # CLI communication (pure I/O)
+│       ├── reasoning/        # Conversation pipeline + intent routing
+│       ├── memory/           # Memory skill (manager + extractor)
+│       └── proposer/         # YAML-only proposal generation
+│
+└── admin/                    # Admin service (privileged)
+    ├── main.py               # Entry point: cl-admin
+    ├── service.py            # Pipeline loop + gate checks
+    ├── implementer.py        # Code generation from spec
+    ├── analyzer.py           # AST safety + composition checks
+    └── notifier.py           # Notifier ABC + CLINotifier
+```
+
+See [docs/PROJECT.md](docs/PROJECT.md) for the full design document.
+
+## Security Invariants
+
+1. User agent writes only to `profiles/` and `proposals/` within the data directory
+2. No `eval`/`exec`/`subprocess` in the user agent — only `importlib` for manifest loading at startup
+3. Code + config + skills are read-only after startup (registry is frozen)
+4. Skill activation requires the full admin pipeline + human approval
+5. The user agent never generates code and never sees system implementation details
+6. Admin service is a separate process — never callable from within the user agent
+
+## Target Hardware
+
+Raspberry Pi 4 + ReSpeaker 2-Mic HAT (voice added as a skill via the proposal pipeline).
 
 ## License
 

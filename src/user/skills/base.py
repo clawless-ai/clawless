@@ -15,7 +15,7 @@ from typing import Any
 
 import yaml
 
-from clawless.types import Message, Session, SkillResult
+from clawless.user.types import Event, KernelContext, SkillOrigin, SkillResult
 
 logger = logging.getLogger(__name__)
 
@@ -46,19 +46,52 @@ class BaseTool(ABC):
 class BaseSkill(ABC):
     """Abstract base class for all Clawless skills.
 
-    A skill encapsulates a capability: it declares trigger phrases,
-    exposes tools, and handles execution.
+    Skills communicate exclusively via events dispatched through the kernel.
+    They never hold direct references to each other.
     """
 
     @property
     @abstractmethod
     def name(self) -> str:
-        """Unique skill identifier."""
+        """Unique skill identifier (e.g. 'cli', 'memory', 'skill-proposer')."""
 
     @property
     @abstractmethod
     def description(self) -> str:
         """What this skill does (shown to the LLM in the system prompt)."""
+
+    @property
+    def version(self) -> str:
+        """Skill version string."""
+        return "0.1.0"
+
+    @property
+    def origin(self) -> SkillOrigin:
+        """How this skill was added (metadata only, no runtime effect)."""
+        return SkillOrigin.BUILTIN
+
+    @property
+    def capabilities(self) -> frozenset[str]:
+        """Capability tokens this skill declares.
+
+        The kernel enforces these at runtime: a skill can only dispatch events
+        that require capabilities it has declared.
+
+        Standard tokens: user:input, user:output, memory:read, memory:write,
+        llm:call, file:write, audio:read, audio:write, gpio:read, gpio:write,
+        network:read, network:write.
+        """
+        return frozenset()
+
+    @property
+    def handles_events(self) -> list[str]:
+        """Event types this skill responds to (e.g. ['user_input', 'memory_query'])."""
+        return []
+
+    @property
+    def dependencies(self) -> list[str]:
+        """Names of skills this skill requires to function."""
+        return []
 
     @property
     def trigger_phrases(self) -> list[str]:
@@ -70,9 +103,25 @@ class BaseSkill(ABC):
         """Tools this skill provides. Override to expose tools."""
         return []
 
+    def on_load(self, ctx: KernelContext) -> None:
+        """Called once after all skills are registered and the kernel is ready.
+
+        Use this for initialization that needs kernel services (LLM, config, etc.).
+        """
+
     @abstractmethod
-    def handle(self, session: Session, message: Message) -> SkillResult | None:
-        """Process a message. Return a SkillResult if this skill handled it, else None."""
+    def handle(self, event: Event, ctx: KernelContext) -> SkillResult | None:
+        """Handle an event. Return a SkillResult if handled, else None."""
+
+    def run(self, ctx: KernelContext) -> None:
+        """Main loop for driver skills (e.g. communication skills).
+
+        Only called on the skill that owns the primary interaction loop.
+        Most skills do NOT override this.
+        """
+
+    def on_unload(self) -> None:
+        """Called on shutdown. Clean up resources."""
 
 
 class SkillRegistry:
@@ -84,10 +133,15 @@ class SkillRegistry:
 
     def __init__(self) -> None:
         self._skills: dict[str, BaseSkill] = {}
+        self._frozen = False
 
     @property
     def skills(self) -> dict[str, BaseSkill]:
         return dict(self._skills)
+
+    @property
+    def skill_names(self) -> list[str]:
+        return list(self._skills.keys())
 
     @property
     def all_tools(self) -> list[BaseTool]:
@@ -97,8 +151,15 @@ class SkillRegistry:
             tools.extend(skill.tools)
         return tools
 
+    def freeze(self) -> None:
+        """Prevent further skill registration. Called after boot."""
+        self._frozen = True
+        logger.info("Skill registry frozen with %d skills", len(self._skills))
+
     def register(self, skill: BaseSkill) -> None:
         """Register a skill instance."""
+        if self._frozen:
+            raise RuntimeError("Skill registry is frozen — cannot register after boot")
         if skill.name in self._skills:
             logger.warning("Skill '%s' already registered, skipping duplicate", skill.name)
             return
@@ -107,6 +168,10 @@ class SkillRegistry:
 
     def get(self, name: str) -> BaseSkill | None:
         return self._skills.get(name)
+
+    def find_by_event(self, event_type: str) -> list[BaseSkill]:
+        """Find skills that handle a given event type."""
+        return [s for s in self._skills.values() if event_type in s.handles_events]
 
     def find_by_trigger(self, text: str) -> list[BaseSkill]:
         """Find skills whose trigger phrases match the input text."""
@@ -119,15 +184,22 @@ class SkillRegistry:
                     break
         return matches
 
+    def find_driver(self) -> BaseSkill | None:
+        """Find the skill with user:input capability (the primary interaction driver)."""
+        for skill in self._skills.values():
+            if "user:input" in skill.capabilities:
+                return skill
+        return None
+
     def load_from_manifest(self, manifest_path: Path) -> None:
         """Load skills listed in a YAML manifest file.
 
         Manifest format:
             skills:
-              - module: "clawless.skills.proposer"
-                class: "SkillProposer"
-              - module: "my_custom_skill"
-                class: "MySkill"
+              - module: "clawless.user.skills.cli"
+                class: "CLICommunicationSkill"
+              - module: "clawless.user.skills.memory"
+                class: "MemorySkill"
         """
         if not manifest_path.is_file():
             logger.info("No skill manifest found at %s, starting with no skills", manifest_path)

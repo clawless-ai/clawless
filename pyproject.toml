@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clawless"
-version = "0.1.0"
-description = "A minimal, restricted, memory-only agent framework for high-safety contexts"
+version = "0.2.0"
+description = "Safety-first agent framework — everything is a skill"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 dependencies = [
@@ -32,17 +32,19 @@ dev = [
 ]
 
 [project.scripts]
-clawless = "clawless.main:main"
+cl-bot = "clawless.user.main:main"
+cl-admin = "clawless.admin.main:main"
 
 [tool.setuptools]
 packages = [
     "clawless",
-    "clawless.channels",
-    "clawless.llm",
-    "clawless.memory",
-    "clawless.safety",
-    "clawless.skills",
-    "clawless.utils",
+    "clawless.user",
+    "clawless.user.skills",
+    "clawless.user.skills.cli",
+    "clawless.user.skills.reasoning",
+    "clawless.user.skills.memory",
+    "clawless.user.skills.proposer",
+    "clawless.admin",
 ]
 
 [tool.setuptools.package-dir]

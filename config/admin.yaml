@@ -1,0 +1,17 @@
+# Clawless Admin Service configuration
+#
+# Controls the proposal-to-activation pipeline.
+
+poll_interval_seconds: 5
+mode: interactive  # "interactive" (CLI prompts) or "headless" (notifications only)
+
+# Gate configuration — which status transitions require human approval
+# Values: "auto" (proceed automatically) or "human" (pause for approval)
+gates:
+  discovered: auto
+  implementation: auto
+  agent-review: auto
+  human-review: human  # always require human approval at this stage
+
+# Notification channel for human-review gates
+notifier: cli  # "cli" (MVP), future: "email", "webhook"

@@ -76,6 +76,12 @@ class MemoryConfig(BaseModel):
     extraction_mode: str = "auto"  # "auto" (LLM if available, regex fallback), "llm", or "regex"
 
 
+class SkillsConfig(BaseModel):
+    """Skill system configuration."""
+
+    auto_propose: bool = True  # auto-propose for explicit requests; ask first for implicit gaps
+
+
 class Settings(BaseSettings):
     """Root application settings.
 
@@ -99,6 +105,7 @@ class Settings(BaseSettings):
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
 
     # Logging
     log_level: str = "INFO"
@@ -132,3 +139,54 @@ def load_settings(config_path: Path | None = None) -> Settings:
     """Create Settings by merging YAML defaults with environment overrides."""
     yaml_data = load_yaml_config(config_path)
     return Settings(**yaml_data)
+
+
+def load_system_profile(
+    profile_path: Path | None = None,
+    active_skills: tuple[str, ...] = (),
+    skill_descriptions: tuple[tuple[str, str], ...] = (),
+) -> "SystemProfile":
+    """Load the abstract system profile from YAML.
+
+    The active_skills and skill_descriptions tuples are populated at boot time
+    from the skill registry, not from the YAML file.
+    """
+    from clawless.user.types import SystemProfile
+
+    if profile_path is None:
+        profile_path = _find_config_sibling("system_profile.yaml")
+    if profile_path is None or not profile_path.is_file():
+        return SystemProfile(
+            platform="unknown",
+            active_skills=active_skills,
+            skill_descriptions=skill_descriptions,
+        )
+
+    with open(profile_path) as f:
+        data = yaml.safe_load(f)
+
+    if not isinstance(data, dict):
+        return SystemProfile(
+            platform="unknown",
+            active_skills=active_skills,
+            skill_descriptions=skill_descriptions,
+        )
+
+    return SystemProfile(
+        platform=data.get("platform", "unknown"),
+        available_capabilities=tuple(data.get("available_capabilities", [])),
+        active_skills=active_skills,
+        skill_descriptions=skill_descriptions,
+    )
+
+
+def _find_config_sibling(filename: str) -> Path | None:
+    """Find a file in the config/ directory near this package."""
+    current = Path(__file__).resolve().parent
+    for _ in range(5):
+        for parent in (current, current.parent):
+            candidate = parent / "config" / filename
+            if candidate.is_file():
+                return candidate
+        current = current.parent
+    return None

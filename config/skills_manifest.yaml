@@ -6,10 +6,13 @@
 #   skills:
 #     - module: "fully.qualified.module.path"
 #       class: "ClassName"
-#
-# The built-in SkillProposer is registered automatically and does not need
-# to be listed here.
 
-skills: []
-#  - module: "clawless.skills.example"
-#    class: "ExampleSkill"
+skills:
+  - module: "clawless.user.skills.cli"
+    class: "CLICommunicationSkill"
+  - module: "clawless.user.skills.reasoning"
+    class: "ReasoningSkill"
+  - module: "clawless.user.skills.memory"
+    class: "MemorySkill"
+  - module: "clawless.user.skills.proposer"
+    class: "SkillProposerSkill"
