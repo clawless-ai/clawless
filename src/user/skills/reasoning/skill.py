@@ -2,16 +2,17 @@
 
 Handles user_input events from communication skills (cli, voice, etc.) and
 orchestrates the full conversation pipeline:
-  safety check → memory retrieval → prompt building → LLM call → intent routing → memory storage
+  safety check → memory retrieval → prompt building → LLM call → tool execution → memory storage
 
 The LLM is made aware of available skills and can:
-  - Route requests to existing skills via [SKILL:name] tags (future)
+  - Invoke skill tools via native LLM tool-calling (function calling)
   - Detect capability gaps and offer to learn new skills
   - Trigger skill proposals via [ACTION:skill_proposal] tags
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -105,18 +106,59 @@ class ReasoningSkill(BaseSkill):
             skill_descriptions=skill_descriptions,
         )
 
-        # 6. Call LLM
+        # 6. Call LLM (with tool-calling loop)
         llm_messages = [{"role": "system", "content": system_prompt}]
         llm_messages.extend(history)
+
+        max_tokens = (
+            ctx.settings.llm_endpoints[0].max_tokens
+            if ctx.settings.llm_endpoints
+            else 1024
+        )
+        tool_kwargs = {"tools": list(ctx.tool_schemas)} if ctx.tool_schemas else {}
 
         try:
             response = ctx.llm.chat(
                 messages=llm_messages,
-                max_tokens=ctx.settings.llm_endpoints[0].max_tokens
-                if ctx.settings.llm_endpoints
-                else 1024,
+                max_tokens=max_tokens,
+                **tool_kwargs,
             )
-            assistant_text = response.content
+
+            # Tool-calling loop: execute tools and feed results back to the LLM
+            for _ in range(3):
+                if not response.tool_calls:
+                    break
+
+                # Append assistant message (with tool calls) to conversation
+                assistant_msg: dict = {"role": "assistant", "tool_calls": response.tool_calls}
+                if response.content:
+                    assistant_msg["content"] = response.content
+                llm_messages.append(assistant_msg)
+
+                # Execute each tool call and append results
+                for tc in response.tool_calls:
+                    func = tc.get("function", {})
+                    tool_name = func.get("name", "")
+                    try:
+                        args = json.loads(func.get("arguments", "{}"))
+                    except json.JSONDecodeError:
+                        args = {}
+                    logger.info("Calling tool '%s' with %s", tool_name, args)
+                    result_str = ctx.call_tool(tool_name, args)
+                    llm_messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", ""),
+                        "content": result_str,
+                    })
+
+                # Call LLM again with tool results
+                response = ctx.llm.chat(
+                    messages=llm_messages,
+                    max_tokens=max_tokens,
+                    **tool_kwargs,
+                )
+
+            assistant_text = response.content or ""
         except RuntimeError as e:
             logger.error("LLM call failed: %s", e)
             return SkillResult(
@@ -124,7 +166,7 @@ class ReasoningSkill(BaseSkill):
                 output="I'm having trouble connecting to my language model. Please try again.",
             )
 
-        # 7. Parse and handle action directives
+        # 7. Parse and handle action directives (backward compat for skill_proposal)
         action, clean_text = self._parse_action(assistant_text)
         if action:
             action_result = ctx.dispatch(Event(
@@ -207,42 +249,59 @@ class ReasoningSkill(BaseSkill):
         else:
             sections.append("(no additional skills loaded)")
 
+        if ctx.tool_schemas:
+            sections.append("")
+            sections.append(
+                "Some skills provide tools (functions) you can call directly. "
+                "When the user's request matches a tool's purpose, call it with "
+                "appropriate parameters. Use information from the conversation "
+                "and user memories to fill in parameters (e.g. if you know the "
+                "user's location from memory, use it for location-based tools)."
+            )
+
         sections.append("")
         sections.append("## Handling Requests")
 
+        next_num = 1
         if self._auto_propose:
             sections.append(
-                "1. If the user EXPLICITLY asks for a new capability "
+                f"{next_num}. If the user EXPLICITLY asks for a new capability "
                 "(e.g. 'learn how to...', 'lerne wie man...', 'add a skill for...', "
                 "'create a skill that...'), "
                 "include `[ACTION:skill_proposal]` at the very start of your response "
                 "and explain what you're creating."
             )
+            next_num += 1
             sections.append(
-                "2. If the user's request implies a capability you don't have "
-                "(e.g. asking for weather when no weather skill exists), "
+                f"{next_num}. If the user's request implies a capability you don't have "
+                "and no matching tool is available, "
                 "tell them you can't do that yet and offer to learn it. "
                 "Do NOT include any action tag — wait for their confirmation."
             )
+            next_num += 1
             sections.append(
-                "3. When the user confirms they want you to learn a previously offered "
+                f"{next_num}. When the user confirms they want you to learn a previously offered "
                 "capability (e.g. 'yes', 'ja', 'sure', 'do it'), "
                 "include `[ACTION:skill_proposal]` at the very start of your response."
             )
+            next_num += 1
         else:
             sections.append(
-                "1. If the user's request requires a capability you don't have, "
+                f"{next_num}. If the user's request requires a capability you don't have "
+                "and no matching tool is available, "
                 "tell them you can't do that yet and offer to learn it. "
                 "Do NOT include any action tag — wait for their confirmation."
             )
+            next_num += 1
             sections.append(
-                "2. When the user confirms they want you to learn a new capability "
+                f"{next_num}. When the user confirms they want you to learn a new capability "
                 "(e.g. 'yes', 'ja', 'sure', 'do it'), "
                 "include `[ACTION:skill_proposal]` at the very start of your response."
             )
+            next_num += 1
 
         sections.append(
-            f"{'4' if self._auto_propose else '3'}. For normal conversation, "
+            f"{next_num}. For normal conversation, "
             "respond naturally without any tags."
         )
 

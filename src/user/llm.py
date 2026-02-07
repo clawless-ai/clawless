@@ -10,6 +10,7 @@ The router tries endpoints in priority order and falls back on failure.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from abc import ABC, abstractmethod
@@ -32,6 +33,7 @@ class LLMResponse:
     usage: dict[str, int] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
     provider_name: str = ""
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
 
 class LLMProvider(ABC):
@@ -103,9 +105,12 @@ class OpenAICompatibleProvider(LLMProvider):
         data = response.json()
 
         content = ""
+        tool_calls = []
         if "choices" in data and data["choices"]:
             choice = data["choices"][0]
-            content = choice.get("message", {}).get("content", "")
+            msg = choice.get("message", {})
+            content = msg.get("content") or ""
+            tool_calls = msg.get("tool_calls", [])
 
         return LLMResponse(
             content=content,
@@ -113,6 +118,7 @@ class OpenAICompatibleProvider(LLMProvider):
             usage=data.get("usage", {}),
             raw=data,
             provider_name=self.name,
+            tool_calls=tool_calls,
         )
 
     def _resolve_api_key(self) -> str:
@@ -169,8 +175,45 @@ class AnthropicProvider(LLMProvider):
         for msg in messages:
             if msg.get("role") == "system":
                 system_text += msg.get("content", "") + "\n"
+            elif msg.get("role") == "tool":
+                # Translate OpenAI tool-result message to Anthropic format
+                chat_messages.append({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": msg.get("tool_call_id", ""),
+                        "content": msg.get("content", ""),
+                    }],
+                })
+            elif msg.get("role") == "assistant" and msg.get("tool_calls"):
+                # Translate assistant message with tool calls to Anthropic content blocks
+                blocks: list[dict[str, Any]] = []
+                if msg.get("content"):
+                    blocks.append({"type": "text", "text": msg["content"]})
+                for tc in msg["tool_calls"]:
+                    func = tc.get("function", {})
+                    args = func.get("arguments", "{}")
+                    blocks.append({
+                        "type": "tool_use",
+                        "id": tc.get("id", ""),
+                        "name": func.get("name", ""),
+                        "input": json.loads(args) if isinstance(args, str) else args,
+                    })
+                chat_messages.append({"role": "assistant", "content": blocks})
             else:
                 chat_messages.append({"role": msg["role"], "content": msg["content"]})
+
+        # Translate tools from OpenAI format to Anthropic format
+        anthropic_tools = None
+        if "tools" in kwargs:
+            anthropic_tools = []
+            for tool in kwargs.pop("tools"):
+                func = tool.get("function", {})
+                anthropic_tools.append({
+                    "name": func.get("name", ""),
+                    "description": func.get("description", ""),
+                    "input_schema": func.get("parameters", {"type": "object", "properties": {}}),
+                })
 
         payload: dict[str, Any] = {
             "model": self._endpoint.model,
@@ -180,6 +223,8 @@ class AnthropicProvider(LLMProvider):
         }
         if system_text.strip():
             payload["system"] = system_text.strip()
+        if anthropic_tools:
+            payload["tools"] = anthropic_tools
         payload.update(kwargs)
 
         response = self._client.post(url, json=payload, headers=headers)
@@ -193,9 +238,19 @@ class AnthropicProvider(LLMProvider):
 
         # Anthropic response: content is a list of blocks
         content = ""
+        tool_calls = []
         for block in data.get("content", []):
             if block.get("type") == "text":
                 content += block.get("text", "")
+            elif block.get("type") == "tool_use":
+                tool_calls.append({
+                    "id": block.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": block.get("name", ""),
+                        "arguments": json.dumps(block.get("input", {})),
+                    },
+                })
 
         return LLMResponse(
             content=content,
@@ -203,6 +258,7 @@ class AnthropicProvider(LLMProvider):
             usage=data.get("usage", {}),
             raw=data,
             provider_name=self.name,
+            tool_calls=tool_calls,
         )
 
     def _resolve_api_key(self) -> str:

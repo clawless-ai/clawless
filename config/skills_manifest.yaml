@@ -1,18 +1,11 @@
-# Clawless Skill Manifest
-# List all skills that should be loaded at startup.
-# Only modules listed here will be imported — this is the allowlist.
-#
-# Format:
-#   skills:
-#     - module: "fully.qualified.module.path"
-#       class: "ClassName"
-
 skills:
-  - module: "clawless.user.skills.cli"
-    class: "CLICommunicationSkill"
-  - module: "clawless.user.skills.reasoning"
-    class: "ReasoningSkill"
-  - module: "clawless.user.skills.memory"
-    class: "MemorySkill"
-  - module: "clawless.user.skills.proposer"
-    class: "SkillProposerSkill"
+- module: clawless.user.skills.cli
+  class: CLICommunicationSkill
+- module: clawless.user.skills.reasoning
+  class: ReasoningSkill
+- module: clawless.user.skills.memory
+  class: MemorySkill
+- module: clawless.user.skills.proposer
+  class: SkillProposerSkill
+- module: clawless.user.skills.weather_fetcher
+  class: WeatherFetcherSkill

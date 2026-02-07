@@ -135,3 +135,5 @@ class KernelContext:
     system_profile: SystemProfile
     dispatch: Callable[[Event], SkillResult | None]
     data_dir: Path
+    tool_schemas: tuple[dict[str, Any], ...] = ()
+    call_tool: Callable[[str, dict[str, Any]], str] = lambda _n, _a: ""

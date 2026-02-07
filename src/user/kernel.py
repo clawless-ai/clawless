@@ -72,6 +72,8 @@ class Kernel:
             system_profile=self._system_profile,
             dispatch=self.dispatch,
             data_dir=self._data_dir,
+            tool_schemas=self._build_tool_schemas(),
+            call_tool=self._call_tool,
         )
 
         # Lifecycle: on_load
@@ -122,6 +124,36 @@ class Kernel:
                 logger.exception("Skill '%s' failed handling '%s'", skill.name, event.type)
 
         return None
+
+    def _build_tool_schemas(self) -> tuple[dict, ...]:
+        """Convert all BaseTool instances from the registry to LLM tool-calling format."""
+        schemas = []
+        for tool in self._registry.all_tools:
+            schemas.append({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters_schema or {
+                        "type": "object",
+                        "properties": {},
+                    },
+                },
+            })
+        if schemas:
+            logger.info("Built %d tool schema(s) from skill registry", len(schemas))
+        return tuple(schemas)
+
+    def _call_tool(self, name: str, arguments: dict) -> str:
+        """Execute a registered tool by name."""
+        for tool in self._registry.all_tools:
+            if tool.name == name:
+                try:
+                    return tool.execute(**arguments)
+                except Exception as e:
+                    logger.exception("Tool '%s' failed", name)
+                    return f"Tool error: {e}"
+        return f"Unknown tool: {name}"
 
     def _shutdown(self) -> None:
         """Call on_unload on all skills."""

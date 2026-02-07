@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import uuid
 from datetime import datetime, timezone
 
 import yaml
@@ -39,14 +40,14 @@ gpio:read, gpio:write — hardware pins
 network:read, network:write — outbound HTTP
 
 ## Standard event types
-user_input, memory_query, memory_store, skill_proposal
+user_input (reserved for reasoning skill), memory_query, memory_store, skill_proposal
 
 ## Instructions
 1. Based on the user's request, determine what skill is needed
 2. Select only the capability tokens the skill would require
 3. Check that required system capabilities are available on this platform
 4. Identify any existing skills this new skill should depend on
-5. List any new event types the skill would introduce
+5. Define the tools (functions) the skill should expose, with typed input parameters
 6. Write a clear rationale explaining why this skill is needed
 
 ## Response format
@@ -56,7 +57,17 @@ Return ONLY a JSON object (no markdown, no explanation, no code fences):
   "description": "One sentence description",
   "capabilities": ["token1", "token2"],
   "dependencies": ["existing-skill-name"],
-  "handles_events": ["event_type1"],
+  "handles_events": [],
+  "tools": [
+    {{
+      "name": "tool_function_name",
+      "description": "What this tool does",
+      "parameters": {{
+        "param_name": {{"type": "string", "description": "What this parameter is"}}
+      }},
+      "required": ["param_name"]
+    }}
+  ],
   "requirements": {{
     "system_capabilities": ["audio_input"]
   }},
@@ -131,13 +142,18 @@ class SkillProposerSkill(BaseSkill):
 
         # Build the full proposal YAML
         timestamp = datetime.now(timezone.utc).isoformat()
+        skill_id = str(uuid.uuid4())
+        slug = _sanitize_name(spec.get("name", request))
         proposal = {
             "proposal": {
+                "id": skill_id,
+                "slug": slug,
                 "name": spec.get("name", "unnamed"),
                 "description": spec.get("description", ""),
                 "capabilities": spec.get("capabilities", []),
                 "dependencies": spec.get("dependencies", []),
                 "handles_events": spec.get("handles_events", []),
+                "tools": spec.get("tools", []),
                 "requirements": spec.get("requirements", {}),
                 "rationale": spec.get("rationale", ""),
                 "user_context": conversation_trail,
@@ -156,9 +172,8 @@ class SkillProposerSkill(BaseSkill):
         }
 
         # Write to proposals directory
-        safe_name = _sanitize_name(spec.get("name", request))
         ts_slug = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        filename = f"proposed_{safe_name}_{ts_slug}.yaml"
+        filename = f"proposed_{slug}_{ts_slug}.yaml"
 
         ensure_proposals_dir(ctx.data_dir)
         yaml_content = yaml.dump(proposal, default_flow_style=False, sort_keys=False)
@@ -216,8 +231,12 @@ def _parse_spec(raw: str) -> dict:
 
 
 def _sanitize_name(name: str) -> str:
-    """Convert a name into a safe filename component."""
-    words = name.lower().split()[:4]
-    name = "_".join(words)
-    name = re.sub(r"[^a-z0-9_]", "", name)
-    return name[:50] or "unnamed"
+    """Convert a name into a kebab-case slug for unified file naming."""
+    slug = name.lower().strip()
+    slug = re.sub(r"[^a-z0-9\s_-]", "", slug)
+    slug = re.sub(r"[\s_]+", "-", slug)
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    # Take first 4 words to keep it concise
+    parts = slug.split("-")[:4]
+    slug = "-".join(parts)
+    return slug[:50] or "unnamed"
